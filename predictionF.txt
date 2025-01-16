@@ -1,0 +1,136 @@
+import torch
+from torch import nn
+from torchvision import transforms
+import matplotlib.pyplot as plt
+from PIL import Image
+import numpy as np
+
+# Define the CNN model (U-Net style for segmentation, without Batch Normalization)
+class UNet(nn.Module):
+    def __init__(self):
+        super(UNet, self).__init__()
+        self.down1 = self.double_conv(3, 64)
+        self.down2 = self.double_conv(64, 128)
+        self.down3 = self.double_conv(128, 256)
+        self.down4 = self.double_conv(256, 512)
+
+        self.up1 = self.up_conv(512 + 256, 256)
+        self.up2 = self.up_conv(256 + 128, 128)
+        self.up3 = self.up_conv(128 + 64, 64)
+        self.out_conv = nn.Conv2d(64, 1, kernel_size=1)
+
+        self.pool = nn.MaxPool2d(2, 2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def double_conv(self, in_c, out_c):
+        return nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+
+    def up_conv(self, in_c, out_c):
+        return nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        d1 = self.down1(x)
+        p1 = self.pool(d1)
+        d2 = self.down2(p1)
+        p2 = self.pool(d2)
+        d3 = self.down3(p2)
+        p3 = self.pool(d3)
+        d4 = self.down4(p3)
+
+        u1 = self.upsample(d4)
+        u1 = torch.cat([u1, d3], dim=1)
+        u1 = self.up1(u1)
+
+        u2 = self.upsample(u1)
+        u2 = torch.cat([u2, d2], dim=1)
+        u2 = self.up2(u2)
+
+        u3 = self.upsample(u2)
+        u3 = torch.cat([u3, d1], dim=1)
+        u3 = self.up3(u3)
+
+        out = self.out_conv(u3)
+        return torch.sigmoid(out)
+
+# Prediction function
+def predict(model, image_path, device):
+    image = Image.open(image_path).convert("RGB")
+    transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor(),
+    ])
+    image_tensor = transform(image).unsqueeze(0).to(device)
+
+    model.eval()  # Set the model to evaluation mode
+    with torch.no_grad():
+        output = model(image_tensor)
+        output = output.squeeze().cpu().numpy()  # Remove the batch and channel dimensions
+
+    return output, image
+
+# Load the trained model
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = UNet().to(device)
+model.load_state_dict(torch.load("mask_detection_model1.pth", map_location=device))
+
+# Inference code
+image_path = "dataset2/test/forgery/Tp_D_CRN_M_B_sec00085_arc00065_11450.jpg"
+output_mask, original_image = predict(model, image_path, device)
+
+# Visualize raw output before thresholding
+print("Raw model output min:", output_mask.min())
+print("Raw model output max:", output_mask.max())
+
+# Display the raw output (before thresholding)
+plt.imshow(output_mask, cmap='gray')  # output_mask is now 2D (256x256)
+plt.title("Raw Output Mask")
+plt.show()
+
+# Normalize the output to [0, 1] range
+output_mask = (output_mask - output_mask.min()) / (output_mask.max() - output_mask.min())
+
+# Post-processing output (thresholding)
+output_mask = (output_mask > 0.4).astype(np.uint8)  # Convert to binary mask (0 or 1)
+
+# Check if the mask indicates a forgery (e.g., if the mask has non-zero areas)
+forgery_score = np.sum(output_mask) / (output_mask.shape[0] * output_mask.shape[1])
+print(forgery_score)
+is_forgery = forgery_score > 0.2  # Adjust this threshold based on results
+
+# Display the results
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+# Original image
+axes[0].imshow(original_image)
+axes[0].set_title("Original Image")
+axes[0].axis('off')
+
+# Transformed image (input to model)
+transformed_image = transforms.Resize((256, 256))(original_image)
+axes[1].imshow(transformed_image)
+axes[1].set_title("Transformed Image")
+axes[1].axis('off')
+
+# Masked image
+axes[2].imshow(output_mask, cmap='grey')  # Display the binary mask
+axes[2].set_title("Predicted Mask")
+axes[2].axis('off')
+
+plt.tight_layout()
+plt.show()
+
+#Output the forgery detection result
+if is_forgery:
+   print("The image is classified as a forgery.")
+else:
+   print("The image is classified as not a forgery.")
