@@ -1,0 +1,89 @@
+import streamlit as st
+import sys
+import io
+from PIL import Image
+import numpy as np
+import cv2
+
+# Function to capture terminal output
+def capture_output(func, *args, **kwargs):
+    captured_output = io.StringIO()  # Create a string buffer
+    sys.stdout = captured_output    # Redirect stdout to the buffer
+    func(*args, **kwargs)           # Run the function
+    sys.stdout = sys.__stdout__     # Reset stdout back to default
+    return captured_output.getvalue()
+
+# Sample logic for image processing
+def process_image(image):
+    print("Starting image processing...")
+    
+    # Convert PIL Image to numpy array
+    img_array = np.array(image)
+    print(f"Image shape: {img_array.shape}")
+    
+    # Convert to grayscale
+    gray_image = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    print("Converted image to grayscale.")
+    
+    # Apply GaussianBlur
+    blurred_image = cv2.GaussianBlur(gray_image, (5, 5), 0)
+    print("Applied Gaussian Blur.")
+    
+    # Example logic: Detect edges
+    edges = cv2.Canny(blurred_image, 100, 200)
+    print("Detected edges using Canny.")
+    
+    print("Image processing completed.")
+    return edges
+
+# Streamlit UI
+st.header("Major Project: Copy Move Forgery Detection")
+st.write("Upload your image below:")
+uploaded_file = st.file_uploader("Drag and drop or select your image", type=["png", "jpg", "jpeg"], accept_multiple_files=False)
+
+if uploaded_file is not None:
+    # Display uploaded image(input image)
+    st.image(uploaded_file, caption="Uploaded Image", use_column_width=False, width=300)
+    
+    # Convert uploaded file to PIL image
+    image = Image.open(uploaded_file)
+    
+    if st.button("Run"):
+        # Capture the terminal output while processing the image
+        output = capture_output(process_image, image)
+        
+        # Display the processed output image (Can be removed if needed because the output image forgery will pop up)
+        processed_image = process_image(image)
+        st.image(processed_image, caption="Processed Image", use_column_width=False, width=300, clamp=True, channels="GRAY")
+        
+        # Display terminal output
+        st.text("Captured Terminal Output:")
+        st.code(output, language="plaintext")
+
+
+
+# Custom HTML footer
+footer = """
+<style>
+footer {
+    visibility: hidden;
+}
+#custom-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background-color: #f8f9fa;
+    text-align: center;
+    padding: 10px 0;
+    color: #6c757d;
+    font-size: 14px;
+    border-top: 1px solid #eaeaea;
+}
+</style>
+<div id="custom-footer">
+    21ISP706    Dept of ISE,Dr.AIT    2024-25  | <a href="https://example.com" target="_blank">Our github repository link</a>
+</div>
+"""
+
+st.markdown(footer, unsafe_allow_html=True)
