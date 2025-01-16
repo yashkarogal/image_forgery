@@ -1,0 +1,151 @@
+import streamlit as st
+import torch
+import io
+import sys
+import numpy as np
+import cv2
+from PIL import Image
+from torch import nn
+from torchvision import transforms
+import matplotlib.pyplot as plt
+
+# Define the U-Net model
+class UNet(nn.Module):
+    def __init__(self):
+        super(UNet, self).__init__()
+        self.down1 = self.double_conv(3, 64)
+        self.down2 = self.double_conv(64, 128)
+        self.down3 = self.double_conv(128, 256)
+        self.down4 = self.double_conv(256, 512)
+
+        self.up1 = self.up_conv(512 + 256, 256)
+        self.up2 = self.up_conv(256 + 128, 128)
+        self.up3 = self.up_conv(128 + 64, 64)
+        self.out_conv = nn.Conv2d(64, 1, kernel_size=1)
+
+        self.pool = nn.MaxPool2d(2, 2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def double_conv(self, in_c, out_c):
+        return nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+
+    def up_conv(self, in_c, out_c):
+        return nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        d1 = self.down1(x)
+        p1 = self.pool(d1)
+        d2 = self.down2(p1)
+        p2 = self.pool(d2)
+        d3 = self.down3(p2)
+        p3 = self.pool(d3)
+        d4 = self.down4(p3)
+
+        u1 = self.upsample(d4)
+        u1 = torch.cat([u1, d3], dim=1)
+        u1 = self.up1(u1)
+
+        u2 = self.upsample(u1)
+        u2 = torch.cat([u2, d2], dim=1)
+        u2 = self.up2(u2)
+
+        u3 = self.upsample(u2)
+        u3 = torch.cat([u3, d1], dim=1)
+        u3 = self.up3(u3)
+
+        out = self.out_conv(u3)
+        return torch.sigmoid(out)
+
+# Prediction function
+def predict(model, image, device):
+    transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor(),
+    ])
+    image_tensor = transform(image).unsqueeze(0).to(device)
+
+    model.eval()
+    with torch.no_grad():
+        output = model(image_tensor)
+        output = output.squeeze().cpu().numpy()
+
+    return output
+
+# Streamlit UI
+st.title("Major Project: Copy Move Forgery Detection")
+st.write("Procedure: Upload an image and click on the 'Run' button to detect forgery.")
+
+# Upload image
+uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Display the uploaded image
+    image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Uploaded Image", use_column_width=False, width=300)
+
+    # Load the trained model
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = UNet().to(device)
+    model.load_state_dict(torch.load("mask_detection_model1.pth", map_location=device))
+
+    if st.button("Run"):
+        # Perform prediction
+        output_mask = predict(model, image, device)
+
+        # Normalize and threshold the output mask
+        output_mask = (output_mask - output_mask.min()) / (output_mask.max() - output_mask.min())
+        binary_mask = (output_mask > 0.5).astype(np.uint8)
+
+        # Calculate forgery score
+        forgery_score = np.sum(binary_mask) / (binary_mask.shape[0] * binary_mask.shape[1])
+        is_forgery = forgery_score > 0.05
+
+        # Display results
+        st.subheader("Results")
+        st.write("Forgery Detection Result:", "Forgery Detected" if is_forgery else "No Forgery Detected")
+        st.write(f"Forgery Score: {forgery_score:.2f}")
+
+        # Display the mask
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        axes[0].imshow(image)
+        axes[0].set_title("Original Image")
+        axes[0].axis('off')
+        axes[1].imshow(binary_mask, cmap='gray')
+        axes[1].set_title("Predicted Mask")
+        axes[1].axis('off')
+        st.pyplot(fig)
+
+# Custom footer
+footer = """
+<style>
+footer {
+    visibility: hidden;
+}
+#custom-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background-color: #f8f9fa;
+    text-align: center;
+    padding: 10px 0;
+    color: #6c757d;
+    font-size: 14px;
+    border-top: 1px solid #eaeaea;
+}
+</style>
+<div id="custom-footer">
+    21ISP706    Dept of ISE, Dr.AIT    2024-25| UNDER THE GUIDANCE OF Dr. AJAY PRAKASH AND Prof.KUSHAL   | <a href="https://example.com" target="_blank">Our GitHub Repository</a>
+</div>
+"""
+st.markdown(footer, unsafe_allow_html=True)
